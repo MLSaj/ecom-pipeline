@@ -1,11 +1,16 @@
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.streaming.Trigger
-import org.apache.spark.sql.types.{ArrayType, StringType, StructField, StructType,IntegerType,DoubleType}
+import org.apache.spark.sql.streaming.{ProcessingTime, Trigger}
+import org.apache.spark.sql.types.{ArrayType, DoubleType, IntegerType, StringType, StructField, StructType}
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.log4j._
+
 import scala.util.Random
 import org.apache.spark.sql.functions.{col, udf}
-import scala.math.BigDecimal
+import org.apache.spark.sql.cassandra._
+
+
+
+
 
 object kafkaSparkConnection {
 
@@ -13,6 +18,8 @@ object kafkaSparkConnection {
     .appName("Stream processing application")
     .master("local[*]")
     .getOrCreate()
+
+  spark.sparkContext.setLogLevel("ERROR")
 
   val trans_message_schema: StructType = StructType(Array(
     StructField("results", ArrayType(StructType(Array(
@@ -61,6 +68,30 @@ object kafkaSparkConnection {
 
 
   ))
+
+  val cassandra_connection_host = "35.199.22.78"
+  //val cassandra_connection_host = "10.150.0.9"
+  val cassandra_connection_port = "9042"
+  val cassandra_keyspace_name = "trans_ks"
+  val cassandra_table_name = "trans_message_detail_tbl"
+
+  def save_to_cassandra_table = (current_df:DataFrame,epoc_id:Long) => {
+    print("Inside save_to_cassandra_table function")
+    print("Printing epoc_id: ")
+    print(epoc_id)
+
+    current_df
+    .write
+    .format("org.apache.spark.sql.cassandra")
+    .mode("append")
+    .option("spark.cassandra.connection.host", cassandra_connection_host)
+    .option("spark.cassandra.connection.port", cassandra_connection_port)
+    .option("keyspace", cassandra_keyspace_name)
+    .option("table", cassandra_table_name)
+    .save()
+    print("Exit out of save_to_cassandra_table function")
+
+  }
 
 
   val KAFKA_TOPIC_NAME_CONS = "transmessage"
@@ -177,17 +208,11 @@ object kafkaSparkConnection {
         "MasterCard"
     }
 
-
-//    spark.udf.register(
-//      "random_card_type",
-//      (transaction_card_type_list:Array[String]) =>
-//        random_card(transaction_card_type_list)
-//    )
-    //spark.udf.register("random_card_choice", random_card)
-
     val random_card_choice = udf(
       (transaction_card_type_list:Seq[String]) => random_card(transaction_card_type_list)
       ,StringType)
+
+
 
 
 
@@ -204,7 +229,7 @@ object kafkaSparkConnection {
       col("state"),
       col("zip"),
       col("email"),
-      //concat(col("username"), round(rand() * 1000, 0).cast(IntegerType())).alias("user_id"),
+      concat(col("username"), round(rand() * 1000, 0).cast(IntegerType)).alias("user_id"),
       col("password"),
       col("salt"),
       col("md5"),
@@ -221,19 +246,52 @@ object kafkaSparkConnection {
       col("nationality"),
       col("seed"),
       col("version"),
-      random_card_choice(col("tran_card_type")).alias("tran_card_type")
-      //((col("tran_amount")* get_random)% 0.01).alias("tran_amount")
-      //getRandomCard(col("tran_card_type")).alias("tran_card_type")
-      //concat(col("product_id"), round(rand() * 100, 0).cast(IntegerType())).alias("product_id"),
-      //round(rand() * col("tran_amount"), 2).alias("tran_amount")
+      random_card_choice(col("tran_card_type")).alias("tran_card_type"),
+      concat(col("product_id"), round(rand() * 100, 0).cast(IntegerType)).alias("product_id"),
+      round(rand() * col("tran_amount"), 2).alias("tran_amount")
     )
 
-    trans_df_6
-          .writeStream
-          .format("console")
-          .outputMode("append")
-          .start()
-          .awaitTermination()
+
+    val trans_df_7 = trans_df_6.withColumn("tran_date",
+      from_unixtime(col("registered"), "yyyy-MM-dd HH:mm:ss"))
+//
+//      trans_df_6
+//        .writeStream
+//        .format("console")
+//        .outputMode("append")
+//        .start()
+//        .awaitTermination()
+
+    val trans_df_8 = trans_df_7.select(
+      col("user_id"),
+      col("first_name"),
+      col("last_name"),
+      col("gender"),
+      col("city"),
+      col("state"),
+      col("zip"),
+      col("email"),
+      col("nationality"),
+      col("tran_card_type"),
+      col("tran_date"),
+      col("product_id"),
+      col("tran_amount"))
+
+    trans_df_8
+    .writeStream
+      .trigger(Trigger.ProcessingTime("5 seconds"))
+      .outputMode("update")
+      .foreachBatch(save_to_cassandra_table)
+      .start()
+      .awaitTermination()
+
+//    trans_df_8
+//    .writeStream
+//    .trigger(Trigger.ProcessingTime("5 seconds"))
+//      .outputMode("update")
+//    .option("truncate", "false")
+//    .format("console")
+//    .start()
 
 
 

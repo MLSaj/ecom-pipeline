@@ -46,5 +46,7 @@ libraryDependencies ++= Seq(
 
   //"mysql" % "mysql-connector-java" % "8.0.18"
 
+  "com.datastax.spark" %% "spark-cassandra-connector" % "2.4.0"
+
 
 )
