@@ -62,12 +62,15 @@ object kafkaSparkConnection {
       StructField("product_id", StringType),
       StructField("tran_card_type",  ArrayType(StringType, true), true),
       StructField("tran_amount", DoubleType)
-
     )))
-
-
-
   ))
+
+  // MongoDB Cluster Details
+  val mongodb_host_name = "35.199.22.78"
+  val mongodb_port_no = "27017"
+  val mongodb_user_name = "demouser"
+  val mongodb_password = "demouser"
+  val mongodb_database_name = "trans_db"
 
   val cassandra_connection_host = "35.199.22.78"
   //val cassandra_connection_host = "10.150.0.9"
@@ -283,7 +286,88 @@ object kafkaSparkConnection {
       .outputMode("update")
       .foreachBatch(save_to_cassandra_table)
       .start()
-      .awaitTermination()
+    // Data Processing/Data Transformation
+    val trans_df_9 = trans_df_8.withColumn("tran_year",
+      year(to_timestamp(col("tran_date"), "yyyy")))
+
+    val year_wise_total_sales_count_df = trans_df_9
+      .groupBy("tran_year")
+      .agg(count("tran_year").alias("tran_year_count"))
+
+    val country_wise_total_sales_count_df = trans_df_9
+      .groupBy("nationality")
+      .agg(count("nationality").alias("tran_country_count"))
+
+    val card_type_wise_total_sales_count_df = trans_df_9
+      .groupBy("tran_card_type")
+      .agg(count("tran_card_type").alias("tran_card_type_count"))
+
+    val card_type_wise_total_sales_df = trans_df_9
+      .groupBy("tran_card_type")
+      .agg(sum("tran_amount").alias("tran_card_type_total_sales"))
+
+    val year_country_wise_total_sales_df = trans_df_9
+      .groupBy("tran_year","nationality")
+      .agg(sum("tran_amount").alias("tran_year_country_total_sales"))
+
+    // Writing Aggregated DataFrame into MongoDB Collection Starts Here
+    val mongodb_collection_name = "year_wise_total_sales_count"
+    val spark_mongodb_output_uri = "mongodb://" + mongodb_user_name + ":" + mongodb_password + "@" + mongodb_host_name + ":" + mongodb_port_no + "/" + mongodb_database_name + "." + mongodb_collection_name
+    println("Printing spark_mongodb_output_uri: " + spark_mongodb_output_uri)
+
+    year_wise_total_sales_count_df.writeStream
+      .trigger(Trigger.ProcessingTime("5 seconds"))
+      .outputMode("update")
+      .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
+        //val batchDF_1 = batchDF.withColumn("batch_id", lit(batchId))
+        // Transform batchDF and write it to sink/target/persistent storage
+        // Write data from spark dataframe to database
+
+        batchDF.write
+          .format("mongo")
+          .mode("append")
+          .option("uri", spark_mongodb_output_uri)
+          .option("database", mongodb_database_name)
+          .option("collection", mongodb_collection_name)
+          .save()
+      }.start()
+
+    val mongodb_collection_name_1 = "country_wise_total_sales_count"
+    val spark_mongodb_output_uri_1 = "mongodb://" + mongodb_user_name + ":" + mongodb_password + "@" + mongodb_host_name + ":" + mongodb_port_no + "/" + mongodb_database_name + "." + mongodb_collection_name
+    println("Printing spark_mongodb_output_uri: " + spark_mongodb_output_uri)
+
+    country_wise_total_sales_count_df.writeStream
+      .trigger(Trigger.ProcessingTime("5 seconds"))
+      .outputMode("update")
+      .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
+        //val batchDF_1 = batchDF.withColumn("batch_id", lit(batchId))
+        // Transform batchDF and write it to sink/target/persistent storage
+        // Write data from spark dataframe to database
+
+        batchDF.write
+          .format("mongo")
+          .mode("append")
+          .option("uri", spark_mongodb_output_uri_1)
+          .option("database", mongodb_database_name)
+          .option("collection", mongodb_collection_name_1)
+          .save()
+      }.start()
+    // Writing Aggregated DataFrame into MongoDB Collection Ends Here
+
+    // Write final result into console for debugging purpose
+    val trans_detail_write_stream = year_wise_total_sales_count_df
+      .writeStream
+      .trigger(Trigger.ProcessingTime("5 seconds"))
+      .outputMode("update")
+      .option("truncate", "false")
+      .format("console")
+      .start()
+
+    trans_detail_write_stream.awaitTermination()
+
+    println("Real-Time Data Pipeline Completed.")
+
+
 
 //    trans_df_8
 //    .writeStream
